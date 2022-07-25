@@ -1,6 +1,8 @@
 AWSTemplateFormatVersion: 2010-09-09
 Description: CI/CD pipeline for GitHub projects
 Parameters:
+  EC2StackNameParameter:
+    Type: String
   GitHubOwner:
     Type: String
     AllowedPattern: '[A-Za-z0-9-]+'
@@ -15,6 +17,12 @@ Parameters:
   CodeBuildEnvironmentImage:
     Type: String
     Default: 'aws/codebuild/standard:4.0'
+  BucketName:
+    Type: String
+    Default: github-aws-cicd-codepipelineartifactstore-6oz47orv39xt
+  CodeDeployServiceRole:
+    Type: String
+    Default: arn:aws:iam::948893417049:role/CodeDeployServiceRole
 Resources:
   CodeBuildServiceRole:
     Type: 'AWS::IAM::Role'
@@ -50,6 +58,15 @@ Resources:
                 Effect: Allow
                 Action:
                   - 's3:PutObject'
+                Resource:
+                  - '*'
+              - Effect: Allow
+                Action:
+                  - 's3:PutObject'
+                  - 's3:GetObject'
+                  - 's3:GetObjectVersion'
+                  - 's3:GetBucketAcl'
+                  - 's3:GetBucketLocation'
                 Resource:
                   - '*'
               - Sid: S3BucketIdentity
@@ -95,8 +112,7 @@ Resources:
         Type: LINUX_CONTAINER
         ComputeType: BUILD_GENERAL1_SMALL
         Image: !Ref CodeBuildEnvironmentImage
-
-  CodeBuilProjectDeployDev:  
+  CodeBuilProjectDeployDev:
     Type: 'AWS::CodeBuild::Project'
     Properties:
       Name: !Sub '${AWS::StackName}-deploy-dev'
@@ -105,7 +121,7 @@ Resources:
         - Arn
       Source:
         Type: CODEPIPELINE
-        BuildSpec: deployspec.yml
+        BuildSpec: deployspec.y
       Artifacts:
         Type: CODEPIPELINE
       Environment:
@@ -115,8 +131,7 @@ Resources:
         EnvironmentVariables:
           - Name: ENV_NAME
             Value: dev
-  
-  CodeBuilProjectDeployQa:  
+  CodeBuilProjectDeployQa:
     Type: 'AWS::CodeBuild::Project'
     Properties:
       Name: !Sub '${AWS::StackName}-deploy-qa'
@@ -134,29 +149,7 @@ Resources:
         Image: !Ref CodeBuildEnvironmentImage
         EnvironmentVariables:
           - Name: ENV_NAME
-            Value: qa  
-
-  CodeBuilProjectDeployProd:  
-    Type: 'AWS::CodeBuild::Project'
-    Properties:
-      Name: !Sub '${AWS::StackName}-deploy-prod'
-      ServiceRole: !GetAtt 
-        - CodeBuildServiceRole
-        - Arn
-      Source:
-        Type: CODEPIPELINE
-        BuildSpec: deployspec.yml
-      Artifacts:
-        Type: CODEPIPELINE
-      Environment:
-        Type: LINUX_CONTAINER
-        ComputeType: BUILD_GENERAL1_SMALL
-        Image: !Ref CodeBuildEnvironmentImage
-        EnvironmentVariables:
-          - Name: ENV_NAME
-            Value: prod
-
-
+            Value: qa
   CodePipelineServiceRole:
     Type: 'AWS::IAM::Role'
     Properties:
@@ -200,6 +193,15 @@ Resources:
                   - 's3:GetBucketLocation'
                 Resource:
                   - '*'
+              - Effect: Allow
+                Action:
+                  - 's3:PutObject'
+                  - 's3:GetObject'
+                  - 's3:GetObjectVersion'
+                  - 's3:GetBucketAcl'
+                  - 's3:GetBucketLocation'
+                Resource:
+                  - '*'
               - Sid: CodeBuildPolicy
                 Action:
                   - 'codebuild:BatchGetBuilds'
@@ -229,6 +231,18 @@ Resources:
       TargetPipelineVersion: !GetAtt 
         - CodePipeline
         - Version
+  CodeDeployApplication:
+    Type: 'AWS::CodeDeploy::Application'
+  CodeDeployGroup:
+    Type: 'AWS::CodeDeploy::DeploymentGroup'
+    Properties:
+      ApplicationName: !Ref CodeDeployApplication
+      Ec2TagFilters:
+        - Key: Name
+          Value: !ImportValue 
+            'Fn::Sub': '${EC2StackNameParameter}-EC2'
+          Type: KEY_AND_VALUE
+      ServiceRoleArn: !Ref CodeDeployServiceRole
   CodePipeline:
     Type: 'AWS::CodePipeline::Pipeline'
     Properties:
@@ -267,38 +281,13 @@ Resources:
                 Version: '1'
               Configuration:
                 ProjectName: !Ref CodeBuilProject
-              OutputArtifacts:
-                - Name: BuildOutput
               InputArtifacts:
                 - Name: SourceCode
-        - Name: Dev   
+              OutputArtifacts:
+                - Name: output
+        - Name: Approval
           Actions:
-            - Name: Deploy
-              ActionTypeId:
-                Category: Build
-                Owner: AWS
-                Provider: CodeBuild
-                Version: '1'
-              Configuration:
-                ProjectName: !Ref CodeBuilProjectDeployDev
-              InputArtifacts:
-                - Name: BuildOutput
-        - Name: Qa   
-          Actions:
-            - Name: Deploy
-              RunOrder: 1
-              ActionTypeId:
-                Category: Build
-                Owner: AWS
-                Provider: CodeBuild
-                Version: '1'
-              Configuration:
-                ProjectName: !Ref CodeBuilProjectDeployQa
-              InputArtifacts:
-                - Name: BuildOutput
-
             - Name: Approval
-              RunOrder: 2
               ActionTypeId:
                 Category: Approval
                 Owner: AWS
@@ -306,16 +295,18 @@ Resources:
                 Version: '1'
               Configuration:
                 CustomData: Approve or Reject this change after running tests
-
-        - Name: Prod   
+        - Name: Deploy
           Actions:
             - Name: Deploy
               ActionTypeId:
-                Category: Build
+                Category: Deploy
                 Owner: AWS
-                Provider: CodeBuild
                 Version: '1'
+                Provider: CodeDeploy
               Configuration:
-                ProjectName: !Ref CodeBuilProjectDeployProd
+                ApplicationName: !Ref CodeDeployApplication
+                DeploymentGroupName: !Ref CodeDeployGroup
               InputArtifacts:
-                - Name: BuildOutput
+                - Name: output
+              RunOrder: 1
+
