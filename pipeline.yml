@@ -309,4 +309,3 @@ Resources:
               InputArtifacts:
                 - Name: output
               RunOrder: 1
-
