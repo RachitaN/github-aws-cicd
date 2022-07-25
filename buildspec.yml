@@ -4,7 +4,8 @@ phases:
   build:
     commands:
       - echo Entered the build phase...
-      - echo Build started on 'date'
+      - echo Build started on `date`
+
 artifacts:
    files:
-     - '**/*
+     - '**/*'
