@@ -308,4 +308,3 @@ Resources:
                 DeploymentGroupName: !Ref CodeDeployGroup
               InputArtifacts:
                 - Name: output
-              RunOrder: 1
